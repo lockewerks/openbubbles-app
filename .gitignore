@@ -1,60 +1,52 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
+# OS / editor
 .DS_Store
-.atom/
-.buildlog/
-.history
-.svn/
-
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
+*.swp
+.history/
 .idea/
+*.iml
+.vscode/
+.vs/
+*.user
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
-.pub-cache/
-.pub/
-/build/
-pubspeck.lock
-
-# Web related
-
-# Exceptions to above rules.
-!/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
-
-#signing
-**/android/key.properties
-**/android/.settings
-**/releases
-
-#objectbox
-.dart_tool/*
-!.dart_tool/build
-.dart_tool/build/entrypoint
-.dart_tool/build/*/error_cache/**
-.dart_tool/build/generated
-!.dart_tool/build/generated/*/*.info
-
-#private keys
+# Secrets
+.env
 *.env
-.vscode/launch.json
-/lib/models/html/giphy.dart
 
-#native-lib
-native-lib/target/**
+# CMake / build
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+*.cmake.cache
+install_manifest.txt
 
+# Visual Studio / MSVC
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.aps
+*.tlog
+.vs/
+Debug/
+Release/
+x64/
+
+# Rust / Cargo
+target/
+**/target/
+Cargo.lock.bak
+
+# Python scratch (protoc helpers, etc.)
+__pycache__/
+*.pyc
+
+# Generated C++ headers from cxx (lives under cargo target/)
+# already excluded by target/
+
+# Private test data
 /rust/src/api/hw_testing.plist
 /rust/src/api/id_testing.plist

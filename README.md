@@ -1,36 +1,49 @@
-# OpenBubbles
+# WhatBubbles
 
-OpenBubbles is an open-source and cross-platform ecosystem of apps aimed to bring Apple platform services to Android and Windows! With OpenBubbles, you'll be able to send messages, media, and much more to your friends and family.
+WhatBubbles is an open-source, desktop-first iMessage client for Windows. It is a hard fork of [OpenBubbles](https://github.com/OpenBubbles/openbubbles-app), rewritten as a native C++ application with [Dear ImGui](https://github.com/ocornut/imgui), reusing the original Rust protocol core via an `cxx` FFI bridge.
 
-**Please note that OpenBubbles requires access to a Mac and an Apple ID to function!
+WhatBubbles is a client alternative for the OpenBubbles ecosystem. It is not a replacement for the OpenBubbles service, relay, or any backend infrastructure. WhatBubbles requires access to a Mac and an Apple ID, along with a compatible OpenBubbles-flavoured service, to function.
 
-Key Features:
+## Status
 
-- Send/receive emoji reactions 
-- Send formatted messages (bold, italic, etc)
-- Edit messages
-- Unsend messages 
-- Call your friends on FaceTime
-- Answer calls from your friends on FaceTime
-- See friends' locations on FindMy
-- Join and Sync iCloud Shared Albums
-- See typing indicators
-- Receive stickers
-- Create and manage group chats
-- Add an icon to personalize your group chat 
-- Send images and videos
-- Forward SMS and MMS to/from connected Macs or other devices with OpenBubbles 
+Early development. The Rust protocol core (`rust/` + `rustpush/`) is inherited from OpenBubbles. The C++/ImGui frontend is being built from scratch. Do not expect feature parity with upstream yet.
 
-If you need help setting up the app, have any issues or feature requests, or just want to come hang out, feel free to join our Discord, linked below! We hope you enjoy using the app!
+Only the Windows desktop build is in scope.
 
-## Useful links
+## Stack
 
-* Our Website: [here](https://openbubbles.app)
-* Discord: [here](https://discord.gg/98fWS4AQqN)!
-    - We highly encourage users to join to get in direct communication with the developers and community
-* GitHub: [here](https://github.com/OpenBubbles)
-    - Please submit any issues with the app here so we can properly track them! Remember to search before opening a ticket :)
+- **Frontend:** C++17, Dear ImGui, Win32 + Direct3D 11 backend.
+- **Protocol core:** Rust, reusing the `rustpush` crate (Apple ID auth, APNs push, IDS lookup, iMessage send/receive).
+- **FFI:** the [`cxx`](https://cxx.rs) crate, surfaced in `rust/src/ffi.rs`.
+- **Build system:** CMake, integrating Cargo via [Corrosion](https://github.com/corrosion-rs/corrosion).
 
-## Getting Started
+## Layout
 
-[Quickstart](https://openbubbles.app/quickstart.html)
+```
+WhatBubbles/
+├── app/            # C++/ImGui frontend
+├── rust/           # Rust FFI bridge (cxx) + shared helpers
+├── rustpush/       # Protocol core (submodule, inherited from OpenBubbles)
+├── CMakeLists.txt  # Top-level build
+├── LICENSE
+├── NOTICE
+├── README.md
+├── CONTRIBUTING.md
+└── CODE_OF_CONDUCT.md
+```
+
+## Building
+
+See `CONTRIBUTING.md` for the full toolchain setup and commands.
+
+## Acknowledgments
+
+WhatBubbles is a fork of [OpenBubbles](https://github.com/OpenBubbles/openbubbles-app), which itself builds on [BlueBubbles](https://github.com/BlueBubblesApp/bluebubbles-app). Both projects are licensed under the Apache License, Version 2.0; the same license applies to this fork.
+
+The Rust protocol core under `rust/` (heavily rewritten for this port) and `rustpush/` (unchanged) originate from those projects. Substantial credit to their contributors for the reverse-engineering work behind the iMessage protocol support.
+
+The "Bubbles" name is used only to describe the origin of the work, as permitted by Section 6 of the Apache License, Version 2.0. WhatBubbles is not endorsed by, affiliated with, or sponsored by either upstream project.
+
+## License
+
+Apache License, Version 2.0. See [`LICENSE`](./LICENSE) for the full text and [`NOTICE`](./NOTICE) for attribution details.

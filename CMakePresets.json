@@ -1,0 +1,33 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "win-vs",
+            "displayName": "Windows / Visual Studio 2022 (x64)",
+            "generator": "Visual Studio 17 2022",
+            "architecture": { "value": "x64" },
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "Rust_COMPILER": "$env{USERPROFILE}/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin/rustc.exe",
+                "Rust_RESOLVE_RUSTUP_TOOLCHAINS": "OFF"
+            }
+        },
+        {
+            "name": "win-ninja",
+            "displayName": "Windows / Ninja (run from a VS Developer Command Prompt)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "Rust_COMPILER": "$env{USERPROFILE}/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin/rustc.exe",
+                "Rust_RESOLVE_RUSTUP_TOOLCHAINS": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "win-vs-release",  "configurePreset": "win-vs", "configuration": "Release" },
+        { "name": "win-vs-debug",    "configurePreset": "win-vs", "configuration": "Debug" },
+        { "name": "win-ninja",       "configurePreset": "win-ninja" }
+    ]
+}
