@@ -125,6 +125,57 @@ int APIENTRY wWinMain(HINSTANCE hinstance, HINSTANCE, PWSTR, int)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui::StyleColorsDark();
+
+    const std::string fonts_root = []() -> std::string {
+        char buf[MAX_PATH] = {};
+        if (GetWindowsDirectoryA(buf, MAX_PATH)) return std::string(buf) + "\\Fonts\\";
+        return "C:\\Windows\\Fonts\\";
+    }();
+    auto try_load_font = [&](const char* name, float size, const ImFontConfig* cfg,
+                             const ImWchar* ranges) -> ImFont* {
+        const std::string full = fonts_root + name;
+        return io.Fonts->AddFontFromFileTTF(full.c_str(), size, cfg, ranges);
+    };
+
+    ImFontConfig primary_cfg;
+    primary_cfg.OversampleH = 2;
+    primary_cfg.OversampleV = 2;
+    primary_cfg.PixelSnapH  = false;
+    static const ImWchar primary_ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1
+        0x0100, 0x017F, // Latin Extended-A
+        0x0180, 0x024F, // Latin Extended-B
+        0x0370, 0x03FF, // Greek
+        0x0400, 0x04FF, // Cyrillic
+        0x2000, 0x206F, // General Punctuation
+        0x2070, 0x209F, // Super/subscripts
+        0x20A0, 0x20CF, // Currency
+        0x2100, 0x214F, // Letterlike
+        0x2190, 0x21FF, // Arrows
+        0x2200, 0x22FF, // Math operators
+        0x25A0, 0x25FF, // Geometric shapes
+        0x2600, 0x26FF, // Misc symbols
+        0x2700, 0x27BF, // Dingbats
+        0,
+    };
+    ImFont* primary = try_load_font("segoeui.ttf", 17.0f, &primary_cfg, primary_ranges);
+    if (!primary) primary = try_load_font("tahoma.ttf", 17.0f, &primary_cfg, primary_ranges);
+    if (!primary) io.Fonts->AddFontDefault();
+
+    ImFontConfig symbol_cfg;
+    symbol_cfg.MergeMode   = true;
+    symbol_cfg.OversampleH = 1;
+    symbol_cfg.OversampleV = 1;
+    symbol_cfg.GlyphMinAdvanceX = 14.0f;
+    static const ImWchar symbol_ranges[] = {
+        0x2000, 0x2BFF,   // punct → misc symbols / arrows (BMP)
+        0xFB00, 0xFB4F,   // ligatures
+        0xFE00, 0xFE0F,   // variation selectors
+        0xFF00, 0xFFEF,   // halfwidth/fullwidth
+        0,
+    };
+    try_load_font("seguisym.ttf", 16.0f, &symbol_cfg, symbol_ranges);
+
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_device, g_device_context);
 
