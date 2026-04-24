@@ -45,6 +45,16 @@ pub struct HandleRow {
     pub display_name: String,
 }
 
+pub struct AttachmentRow {
+    pub guid: String,
+    pub message_guid: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub local_path: String,
+    pub transfer_state: i32,
+}
+
 const SCHEMA: &str = r#"
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -393,6 +403,48 @@ impl Storage {
                     is_unsent: r.get::<_, i64>(11)? != 0,
                     has_attachments: r.get::<_, i64>(12)? != 0,
                     thread_origin_guid: r.get(13)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn insert_attachment(
+        &self,
+        guid: &str,
+        message_guid: &str,
+        filename: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        local_path: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO attachments(guid, message_guid, filename, mime_type,\
+             size_bytes, local_path, transfer_state) VALUES(?,?,?,?,?,?,?)",
+            params![guid, message_guid, filename, mime_type, size_bytes, local_path, 0],
+        )?;
+        self.conn.execute(
+            "UPDATE messages SET has_attachments = 1 WHERE guid = ?",
+            params![message_guid],
+        )?;
+        Ok(())
+    }
+
+    pub fn attachments_for_message(&self, message_guid: &str) -> Result<Vec<AttachmentRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT guid, message_guid, filename, mime_type, size_bytes, local_path, transfer_state\
+             FROM attachments WHERE message_guid = ?",
+        )?;
+        let rows = stmt
+            .query_map(params![message_guid], |r| {
+                Ok(AttachmentRow {
+                    guid: r.get(0)?,
+                    message_guid: r.get(1)?,
+                    filename: r.get(2)?,
+                    mime_type: r.get(3)?,
+                    size_bytes: r.get(4)?,
+                    local_path: r.get(5)?,
+                    transfer_state: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

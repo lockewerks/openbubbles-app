@@ -31,7 +31,9 @@ target_link_libraries(whatbubbles PRIVATE
     crypt32
     advapi32
     user32
-    ntdll)
+    ntdll
+    comdlg32
+    shell32)
 
 set_target_properties(whatbubbles PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"

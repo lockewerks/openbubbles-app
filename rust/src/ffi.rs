@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use uuid::Uuid;
@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::app::AppState;
 use crate::events::Event;
 use crate::integration::{self, AuthState};
-use crate::storage::{ChatRow, MessageRow};
+use crate::storage::{AttachmentRow, ChatRow, MessageRow};
 
 #[cxx::bridge(namespace = "whatbubbles")]
 mod bridge {
@@ -47,6 +47,16 @@ mod bridge {
         display_name: String,
     }
 
+    struct AttachmentInfo {
+        guid: String,
+        message_guid: String,
+        filename: String,
+        mime_type: String,
+        size_bytes: i64,
+        local_path: String,
+        transfer_state: i32,
+    }
+
     struct EventDto {
         kind: String,
         text: String,
@@ -74,8 +84,10 @@ mod bridge {
         fn list_chats(app: &AppState, include_archived: bool) -> Vec<ChatSummary>;
         fn list_messages(app: &AppState, chat_guid: &str, limit: i64) -> Vec<MessageView>;
         fn list_handles(app: &AppState) -> Vec<HandleInfo>;
+        fn list_attachments(app: &AppState, message_guid: &str) -> Vec<AttachmentInfo>;
 
         fn send_message_local(app: &AppState, chat_guid: &str, text: &str) -> Result<String>;
+        fn attach_file_local(app: &AppState, chat_guid: &str, text: &str, source_path: &str) -> Result<String>;
         fn mark_chat_read(app: &AppState, chat_guid: &str) -> Result<()>;
         fn pin_chat(app: &AppState, chat_guid: &str, pinned: bool, order: i32) -> Result<()>;
         fn archive_chat(app: &AppState, chat_guid: &str, archived: bool) -> Result<()>;
@@ -208,6 +220,47 @@ fn list_messages(app: &AppState, chat_guid: &str, limit: i64) -> Vec<bridge::Mes
     }
 }
 
+fn list_attachments(app: &AppState, message_guid: &str) -> Vec<bridge::AttachmentInfo> {
+    match app.storage.lock().attachments_for_message(message_guid) {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|a: AttachmentRow| bridge::AttachmentInfo {
+                guid: a.guid,
+                message_guid: a.message_guid,
+                filename: a.filename,
+                mime_type: a.mime_type,
+                size_bytes: a.size_bytes,
+                local_path: a.local_path,
+                transfer_state: a.transfer_state,
+            })
+            .collect(),
+        Err(e) => {
+            app.events.send(Event::Error(format!("list_attachments: {e}")));
+            vec![]
+        }
+    }
+}
+
+fn mime_from_ext(name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    match lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("") {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
 fn list_handles(app: &AppState) -> Vec<bridge::HandleInfo> {
     match app.storage.lock().list_handles() {
         Ok(rows) => rows
@@ -249,6 +302,80 @@ fn now_epoch() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn attach_file_local(
+    app: &AppState,
+    chat_guid: &str,
+    text: &str,
+    source_path: &str,
+) -> Result<String> {
+    let src = Path::new(source_path);
+    if !src.exists() {
+        return Err(anyhow!("file not found: {source_path}"));
+    }
+    let metadata = std::fs::metadata(src)?;
+    let size_bytes = metadata.len() as i64;
+    let filename = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("unreadable filename"))?
+        .to_string();
+    let mime = mime_from_ext(&filename).to_string();
+
+    let att_guid = format!("attach-{}", Uuid::new_v4());
+    let dest_dir = app.data_dir.join("attachments").join(&att_guid);
+    std::fs::create_dir_all(&dest_dir)?;
+    let dest = dest_dir.join(&filename);
+    std::fs::copy(src, &dest)?;
+    let dest_str = dest.to_string_lossy().into_owned();
+
+    let msg_guid = format!("temp-{}", Uuid::new_v4());
+    let row = MessageRow {
+        guid: msg_guid.clone(),
+        chat_guid: chat_guid.to_string(),
+        handle_id: None,
+        sender_address: String::new(),
+        sender_display_name: String::new(),
+        text: text.to_string(),
+        subject: String::new(),
+        is_from_me: true,
+        date: now_epoch(),
+        date_read: 0,
+        date_edited: 0,
+        is_unsent: false,
+        has_attachments: true,
+        thread_origin_guid: String::new(),
+    };
+    {
+        let storage = app.storage.lock();
+        storage.insert_message(&row)?;
+        storage.insert_attachment(&att_guid, &msg_guid, &filename, &mime, size_bytes, &dest_str)?;
+    }
+
+    app.events.send(Event::MessageSent {
+        chat_guid: chat_guid.to_string(),
+        message_guid: msg_guid.clone(),
+    });
+
+    let cg = chat_guid.to_string();
+    let mg = msg_guid.clone();
+    let text_s = text.to_string();
+    let path_s = dest_str.clone();
+    let bus = app.events.clone();
+    app.runtime_handle.spawn(async move {
+        if let Err(e) =
+            integration::send_imessage_with_attachments(&cg, &[], &text_s, &[path_s]).await
+        {
+            bus.send(Event::MessageFailed {
+                chat_guid: cg,
+                tentative_guid: mg,
+                reason: e.to_string(),
+            });
+        }
+    });
+
+    Ok(msg_guid)
 }
 
 fn send_message_local(app: &AppState, chat_guid: &str, text: &str) -> Result<String> {

@@ -39,6 +39,15 @@ pub async fn send_imessage(
     bail!("send_imessage: not yet wired — port from parked rust/src/api/api.rs::send");
 }
 
+pub async fn send_imessage_with_attachments(
+    _chat_guid: &str,
+    _participant_addresses: &[String],
+    _text: &str,
+    _attachment_paths: &[String],
+) -> Result<String> {
+    bail!("send_imessage_with_attachments: not yet wired — depends on MMCS upload path in api.rs + IMClient");
+}
+
 pub async fn send_tapback(_message_guid: &str, _reaction: &str) -> Result<()> {
     bail!("send_tapback: not yet wired — tapback path in api.rs");
 }

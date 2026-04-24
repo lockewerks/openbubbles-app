@@ -5,6 +5,10 @@
 #include <ctime>
 #include <string>
 
+#include <windows.h>
+#include <commdlg.h>
+#include <shellapi.h>
+
 #include "imgui.h"
 
 namespace app {
@@ -46,6 +50,42 @@ std::string to_std(const rust::String& s) {
 
 std::string to_std(const rust::Str& s) {
     return std::string(s);
+}
+
+std::string wide_to_utf8(const wchar_t* w) {
+    if (!w) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 1) return {};
+    std::string out(static_cast<size_t>(len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, out.data(), len, nullptr, nullptr);
+    return out;
+}
+
+std::string pick_open_file() {
+    wchar_t buf[MAX_PATH * 4] = {};
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = nullptr;
+    ofn.lpstrFilter = L"All files\0*.*\0";
+    ofn.lpstrFile   = buf;
+    ofn.nMaxFile    = MAX_PATH * 4;
+    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&ofn)) return {};
+    return wide_to_utf8(buf);
+}
+
+std::string format_size_bytes(int64_t n) {
+    const char* units[] = { "B", "KB", "MB", "GB" };
+    double v = static_cast<double>(n);
+    size_t u = 0;
+    while (v >= 1024.0 && u + 1 < sizeof(units) / sizeof(units[0])) {
+        v /= 1024.0;
+        ++u;
+    }
+    char out[32];
+    if (u == 0) std::snprintf(out, sizeof(out), "%d %s", static_cast<int>(n), units[u]);
+    else        std::snprintf(out, sizeof(out), "%.1f %s", v, units[u]);
+    return out;
 }
 
 bool case_insensitive_contains(const std::string& haystack, const std::string& needle) {
@@ -305,7 +345,25 @@ void AppShell::draw_conversation() {
         if (m.is_unsent) {
             ImGui::TextDisabled("(unsent)");
         } else {
-            ImGui::TextWrapped("%s", text.c_str());
+            if (!text.empty()) {
+                ImGui::TextWrapped("%s", text.c_str());
+            }
+            if (m.has_attachments) {
+                auto atts = whatbubbles::list_attachments(*state, rust::Str(guid));
+                for (const auto& a : atts) {
+                    const std::string fn = to_std(a.filename);
+                    const std::string mt = to_std(a.mime_type);
+                    const std::string lp = to_std(a.local_path);
+                    ImGui::Separator();
+                    ImGui::Text("[file] %s", fn.c_str());
+                    ImGui::TextDisabled("%s · %s", mt.c_str(),
+                                        format_size_bytes(a.size_bytes).c_str());
+                    if (ImGui::SmallButton("Open")) {
+                        std::wstring wpath(lp.begin(), lp.end());
+                        ShellExecuteW(nullptr, L"open", wpath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    }
+                }
+            }
         }
         ImGui::TextDisabled("%s%s", format_timestamp(m.date).c_str(),
                             m.date_edited ? " (edited)" : "");
@@ -338,13 +396,28 @@ void AppShell::draw_conversation() {
     ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
 
-    ImGui::SetNextItemWidth(avail.x - 100);
+    ImGui::SetNextItemWidth(avail.x - 180);
     const bool submit =
         ImGui::InputTextWithHint("##composer", "iMessage — return to send",
                                  composer_buf.data(), composer_buf.size(),
                                  ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
+    const bool attach_clicked = ImGui::Button("Attach", ImVec2(80, 0));
+    ImGui::SameLine();
     const bool clicked = ImGui::Button("Send", ImVec2(-1, 0));
+    if (attach_clicked) {
+        const std::string path = pick_open_file();
+        if (!path.empty()) {
+            try {
+                whatbubbles::attach_file_local(*state, rust::Str(selected_chat_guid),
+                                               rust::Str(std::string(composer_buf.data())),
+                                               rust::Str(path));
+                composer_buf.fill(0);
+            } catch (const std::exception& e) {
+                push_toast(std::string("attach: ") + e.what());
+            }
+        }
+    }
     if ((submit || clicked) && composer_buf[0] != '\0') {
         whatbubbles::send_message_local(*state, rust::Str(selected_chat_guid),
                                         rust::Str(std::string(composer_buf.data())));
