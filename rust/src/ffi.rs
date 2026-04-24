@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use uuid::Uuid;
@@ -6,6 +7,7 @@ use uuid::Uuid;
 use crate::app::AppState;
 use crate::events::Event;
 use crate::integration::{self, AuthState};
+use crate::session::{self, AuthSession};
 use crate::storage::{AttachmentRow, ChatRow, MessageRow};
 
 #[cxx::bridge(namespace = "whatbubbles")]
@@ -483,43 +485,70 @@ fn unsend_message_local(app: &AppState, message_guid: &str) -> Result<()> {
     Ok(())
 }
 
+fn ensure_session(app: &AppState) -> Result<Arc<AuthSession>> {
+    if let Some(s) = app.session.lock().as_ref().cloned() {
+        return Ok(s);
+    }
+    let cfg = app
+        .os_config
+        .lock()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| anyhow!("no OSConfig yet — complete relay pairing first"))?;
+    let data_dir = app.data_dir.clone();
+    let session = crate::RUNTIME
+        .block_on(session::create_session(&data_dir, &cfg))?;
+    let arc = Arc::new(session);
+    *app.session.lock() = Some(arc.clone());
+    Ok(arc)
+}
+
 fn start_apple_id_auth(app: &AppState, apple_id: &str, password: &str) -> Result<()> {
     if apple_id.is_empty() || password.is_empty() {
         return Err(anyhow!("apple_id and password are required"));
     }
+    let session = ensure_session(app)?;
     app.set_auth(AuthState::AuthenticatingAccount);
+
     let apple = apple_id.to_string();
     let pw = password.to_string();
     let bus = app.events.clone();
     let auth_slot = app.auth.clone();
     let storage = app.storage.clone();
     app.runtime_handle.spawn(async move {
-        match integration::authenticate_apple_id(&apple, &pw).await {
-            Ok(()) => {
-                *auth_slot.lock() = AuthState::Ready;
-                let label = AuthState::Ready.label();
-                let _ = storage.lock().kv_set("auth.state", &label);
-                bus.send(Event::AuthStateChanged { state: label });
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                *auth_slot.lock() = AuthState::Errored(msg.clone());
-                let label = AuthState::Errored(msg).label();
-                let _ = storage.lock().kv_set("auth.state", &label);
-                bus.send(Event::AuthStateChanged { state: label });
-            }
-        }
+        let new_state = match integration::authenticate_apple_id(&session, &apple, &pw).await {
+            Ok(ls) => AuthState::from_login_state(&ls),
+            Err(e) => AuthState::Errored(e.to_string()),
+        };
+        let label = new_state.label();
+        *auth_slot.lock() = new_state;
+        let _ = storage.lock().kv_set("auth.state", &label);
+        bus.send(Event::AuthStateChanged { state: label });
     });
     Ok(())
 }
 
 fn submit_two_factor_code(app: &AppState, code: &str) -> Result<()> {
+    let session = app
+        .session
+        .lock()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| anyhow!("no active auth session — start sign-in first"))?;
+
     let c = code.to_string();
     let bus = app.events.clone();
+    let auth_slot = app.auth.clone();
+    let storage = app.storage.clone();
     app.runtime_handle.spawn(async move {
-        if let Err(e) = integration::submit_2fa_code(&c).await {
-            bus.send(Event::Warn(format!("2fa stub: {e}")));
-        }
+        let new_state = match integration::submit_2fa_code(&session, &c).await {
+            Ok(ls) => AuthState::from_login_state(&ls),
+            Err(e) => AuthState::Errored(e.to_string()),
+        };
+        let label = new_state.label();
+        *auth_slot.lock() = new_state;
+        let _ = storage.lock().kv_set("auth.state", &label);
+        bus.send(Event::AuthStateChanged { state: label });
     });
     Ok(())
 }

@@ -8,6 +8,7 @@ use rustpush::RelayConfig;
 use crate::events::{Event, EventBus};
 use crate::integration::AuthState;
 use crate::os_config;
+use crate::session::AuthSession;
 use crate::storage::Storage;
 
 pub struct AppState {
@@ -18,6 +19,7 @@ pub struct AppState {
     pub auth: Arc<Mutex<AuthState>>,
     pub os_config: Arc<Mutex<Option<RelayConfig>>>,
     pub relay_host: Arc<Mutex<String>>,
+    pub session: Arc<Mutex<Option<Arc<AuthSession>>>>,
 }
 
 impl AppState {
@@ -39,6 +41,11 @@ impl AppState {
                 Some("ready") => AuthState::Ready,
                 Some("authenticating") => AuthState::AuthenticatingAccount,
                 Some("needs_2fa") => AuthState::NeedsTwoFactor,
+                Some("needs_sms_2fa") => AuthState::NeedsSmsTwoFactor,
+                Some("needs_device_2fa") => AuthState::NeedsDeviceTwoFactor,
+                Some(label) if label.starts_with("needs_extra:") => {
+                    AuthState::NeedsExtraStep(label.trim_start_matches("needs_extra:").to_string())
+                }
                 Some(label) if label.starts_with("error:") => {
                     AuthState::Errored(label.trim_start_matches("error:").to_string())
                 }
@@ -56,6 +63,7 @@ impl AppState {
             auth: Arc::new(Mutex::new(auth_state)),
             os_config: Arc::new(Mutex::new(os_config_loaded)),
             relay_host: Arc::new(Mutex::new(relay_host)),
+            session: Arc::new(Mutex::new(None)),
         })
     }
 

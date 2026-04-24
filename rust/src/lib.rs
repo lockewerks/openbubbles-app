@@ -46,4 +46,5 @@ pub mod events;
 pub mod ffi;
 pub mod integration;
 pub mod os_config;
+pub mod session;
 pub mod storage;
