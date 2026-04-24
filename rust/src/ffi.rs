@@ -506,9 +506,12 @@ fn ensure_session(app: &AppState) -> Result<Arc<AuthSession>> {
 async fn apply_login_state(session: &AuthSession, state: rustpush::LoginState) -> AuthState {
     match state {
         rustpush::LoginState::LoggedIn => {
-            match session::finalize_login_and_register_ids(session).await {
+            if let Err(e) = session::finalize_login_and_register_ids(session).await {
+                return AuthState::Errored(format!("ids registration: {e}"));
+            }
+            match session::prepare_im_client(session).await {
                 Ok(_) => AuthState::Ready,
-                Err(e) => AuthState::Errored(format!("ids registration: {e}")),
+                Err(e) => AuthState::Errored(format!("imclient: {e}")),
             }
         }
         other => AuthState::from_login_state(&other),

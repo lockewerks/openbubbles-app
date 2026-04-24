@@ -5,8 +5,10 @@ use anyhow::{anyhow, Result};
 use parking_lot::Mutex;
 use rustpush::{
     APSConnection, APSConnectionResource, APSState, AppleAccount, ArcAnisetteClient,
-    DefaultAnisetteProvider, IDSNGMIdentity, IDSUser, LoginDelegate, LoginState, OSConfig,
-    RelayConfig, authenticate_apple, default_provider, login_apple_delegates,
+    DefaultAnisetteProvider, IDSNGMIdentity, IDSUser, IMClient, LoginDelegate, LoginState,
+    MADRID_SERVICE, OSConfig, RelayConfig, authenticate_apple, default_provider,
+    facetime::{FACETIME_SERVICE, VIDEO_SERVICE}, findmy::MULTIPLEX_SERVICE,
+    login_apple_delegates, register,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
@@ -19,6 +21,7 @@ pub struct AuthSession {
     pub anisette: ArcAnisetteClient<DefaultAnisetteProvider>,
     pub account: Arc<AsyncMutex<AppleAccount<DefaultAnisetteProvider>>>,
     pub ids_user: Arc<Mutex<Option<IDSUser>>>,
+    pub im_client: Arc<Mutex<Option<Arc<IMClient>>>>,
 }
 
 fn aps_state_path(data_dir: &Path) -> PathBuf { data_dir.join("aps_state.json") }
@@ -79,7 +82,59 @@ pub async fn create_session(data_dir: &Path, config: &RelayConfig) -> Result<Aut
         anisette,
         account: Arc::new(AsyncMutex::new(account)),
         ids_user: Arc::new(Mutex::new(ids_user)),
+        im_client: Arc::new(Mutex::new(None)),
     })
+}
+
+pub async fn prepare_im_client(session: &AuthSession) -> Result<Arc<IMClient>> {
+    let user = session
+        .ids_user
+        .lock()
+        .clone()
+        .ok_or_else(|| anyhow!("no IDSUser yet — finalize login first"))?;
+    let mut users = vec![user];
+
+    let os_config: Arc<dyn OSConfig> = session.config.clone();
+    let aps_state = session.conn.state.read().await.clone();
+
+    let services = &[&MADRID_SERVICE, &MULTIPLEX_SERVICE, &FACETIME_SERVICE, &VIDEO_SERVICE];
+
+    register(
+        os_config.as_ref(),
+        &aps_state,
+        services,
+        users.as_mut_slice(),
+        &*session.identity,
+    )
+    .await
+    .map_err(|e| anyhow!("ids register: {e:?}"))?;
+
+    save_json(&ids_user_path(&session.data_dir), &users[0])?;
+    *session.ids_user.lock() = Some(users[0].clone());
+
+    let data_dir_cb = session.data_dir.clone();
+    let slot_cb = session.ids_user.clone();
+    let cache_path = session.data_dir.join("id_cache.plist");
+
+    let client = IMClient::new(
+        session.conn.clone(),
+        users,
+        (*session.identity).clone(),
+        services,
+        cache_path,
+        os_config,
+        Box::new(move |updated: Vec<IDSUser>| {
+            if let Some(u) = updated.first().cloned() {
+                let _ = save_json(&ids_user_path(&data_dir_cb), &u);
+                *slot_cb.lock() = Some(u);
+            }
+        }),
+    )
+    .await;
+
+    let arc = Arc::new(client);
+    *session.im_client.lock() = Some(arc.clone());
+    Ok(arc)
 }
 
 pub async fn finalize_login_and_register_ids(session: &AuthSession) -> Result<IDSUser> {
