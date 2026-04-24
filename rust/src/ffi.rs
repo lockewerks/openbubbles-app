@@ -503,6 +503,28 @@ fn ensure_session(app: &AppState) -> Result<Arc<AuthSession>> {
     Ok(arc)
 }
 
+async fn apply_login_state(session: &AuthSession, state: rustpush::LoginState) -> AuthState {
+    match state {
+        rustpush::LoginState::LoggedIn => {
+            match session::finalize_login_and_register_ids(session).await {
+                Ok(_) => AuthState::Ready,
+                Err(e) => AuthState::Errored(format!("ids registration: {e}")),
+            }
+        }
+        other => AuthState::from_login_state(&other),
+    }
+}
+
+fn persist_auth_label(app_auth: &parking_lot::Mutex<AuthState>,
+                      storage: &parking_lot::Mutex<crate::storage::Storage>,
+                      events: &crate::events::EventBus,
+                      new_state: AuthState) {
+    let label = new_state.label();
+    *app_auth.lock() = new_state;
+    let _ = storage.lock().kv_set("auth.state", &label);
+    events.send(Event::AuthStateChanged { state: label });
+}
+
 fn start_apple_id_auth(app: &AppState, apple_id: &str, password: &str) -> Result<()> {
     if apple_id.is_empty() || password.is_empty() {
         return Err(anyhow!("apple_id and password are required"));
@@ -517,13 +539,10 @@ fn start_apple_id_auth(app: &AppState, apple_id: &str, password: &str) -> Result
     let storage = app.storage.clone();
     app.runtime_handle.spawn(async move {
         let new_state = match integration::authenticate_apple_id(&session, &apple, &pw).await {
-            Ok(ls) => AuthState::from_login_state(&ls),
+            Ok(ls) => apply_login_state(&session, ls).await,
             Err(e) => AuthState::Errored(e.to_string()),
         };
-        let label = new_state.label();
-        *auth_slot.lock() = new_state;
-        let _ = storage.lock().kv_set("auth.state", &label);
-        bus.send(Event::AuthStateChanged { state: label });
+        persist_auth_label(&auth_slot, &storage, &bus, new_state);
     });
     Ok(())
 }
@@ -542,13 +561,10 @@ fn submit_two_factor_code(app: &AppState, code: &str) -> Result<()> {
     let storage = app.storage.clone();
     app.runtime_handle.spawn(async move {
         let new_state = match integration::submit_2fa_code(&session, &c).await {
-            Ok(ls) => AuthState::from_login_state(&ls),
+            Ok(ls) => apply_login_state(&session, ls).await,
             Err(e) => AuthState::Errored(e.to_string()),
         };
-        let label = new_state.label();
-        *auth_slot.lock() = new_state;
-        let _ = storage.lock().kv_set("auth.state", &label);
-        bus.send(Event::AuthStateChanged { state: label });
+        persist_auth_label(&auth_slot, &storage, &bus, new_state);
     });
     Ok(())
 }

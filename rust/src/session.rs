@@ -2,9 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use parking_lot::Mutex;
 use rustpush::{
     APSConnection, APSConnectionResource, APSState, AppleAccount, ArcAnisetteClient,
-    DefaultAnisetteProvider, IDSNGMIdentity, LoginState, OSConfig, RelayConfig, default_provider,
+    DefaultAnisetteProvider, IDSNGMIdentity, IDSUser, LoginDelegate, LoginState, OSConfig,
+    RelayConfig, authenticate_apple, default_provider, login_apple_delegates,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
@@ -16,10 +18,12 @@ pub struct AuthSession {
     pub conn: APSConnection,
     pub anisette: ArcAnisetteClient<DefaultAnisetteProvider>,
     pub account: Arc<AsyncMutex<AppleAccount<DefaultAnisetteProvider>>>,
+    pub ids_user: Arc<Mutex<Option<IDSUser>>>,
 }
 
 fn aps_state_path(data_dir: &Path) -> PathBuf { data_dir.join("aps_state.json") }
 fn identity_path(data_dir: &Path) -> PathBuf { data_dir.join("identity.json") }
+fn ids_user_path(data_dir: &Path) -> PathBuf { data_dir.join("ids_user.json") }
 fn anisette_dir(data_dir: &Path) -> PathBuf { data_dir.join("anisette") }
 
 fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
@@ -65,6 +69,8 @@ pub async fn create_session(data_dir: &Path, config: &RelayConfig) -> Result<Aut
     let account = AppleAccount::new_with_anisette(login_config, anisette.clone())
         .map_err(|e| anyhow!("new apple account: {e:?}"))?;
 
+    let ids_user: Option<IDSUser> = load_json(&ids_user_path(data_dir)).unwrap_or(None);
+
     Ok(AuthSession {
         data_dir: data_dir.to_path_buf(),
         config: config_arc,
@@ -72,7 +78,46 @@ pub async fn create_session(data_dir: &Path, config: &RelayConfig) -> Result<Aut
         conn,
         anisette,
         account: Arc::new(AsyncMutex::new(account)),
+        ids_user: Arc::new(Mutex::new(ids_user)),
     })
+}
+
+pub async fn finalize_login_and_register_ids(session: &AuthSession) -> Result<IDSUser> {
+    {
+        let mut account = session.account.lock().await;
+        account
+            .update_postdata("WhatBubbles", None, &["icloud", "imessage", "facetime"])
+            .await
+            .map_err(|e| anyhow!("update_postdata: {e:?}"))?;
+        if account.get_pet().is_none() {
+            return Err(anyhow!("no PET after login — auth incomplete"));
+        }
+    }
+
+    let os_config: Arc<dyn OSConfig> = session.config.clone();
+    let delegates = {
+        let account = session.account.lock().await;
+        login_apple_delegates(
+            &*account,
+            None,
+            os_config.as_ref(),
+            &[LoginDelegate::IDS, LoginDelegate::MobileMe],
+        )
+        .await
+        .map_err(|e| anyhow!("login_apple_delegates: {e:?}"))?
+    };
+
+    let ids_delegate = delegates
+        .ids
+        .ok_or_else(|| anyhow!("IDS delegate missing in login response"))?;
+
+    let user = authenticate_apple(ids_delegate, os_config.as_ref())
+        .await
+        .map_err(|e| anyhow!("authenticate_apple: {e:?}"))?;
+
+    save_json(&ids_user_path(&session.data_dir), &user)?;
+    *session.ids_user.lock() = Some(user.clone());
+    Ok(user)
 }
 
 pub fn hash_password(password: &str) -> Vec<u8> {
