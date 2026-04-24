@@ -63,6 +63,9 @@ std::unique_ptr<AppShell> AppShell::create(const std::string& data_dir) {
     auto box = whatbubbles::init_app(rust::Str(data_dir));
     auto shell = std::unique_ptr<AppShell>(new AppShell(std::move(box)));
     shell->auth_label = to_std(whatbubbles::auth_state(*shell->state));
+    const std::string host = to_std(whatbubbles::relay_host(*shell->state));
+    std::strncpy(shell->relay_host_buf.data(), host.c_str(),
+                 shell->relay_host_buf.size() - 1);
     if (shell->auth_label != "ready") {
         shell->show_setup = true;
     }
@@ -350,7 +353,7 @@ void AppShell::draw_conversation() {
 }
 
 void AppShell::draw_setup_modal() {
-    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(560, 520), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Setup", &show_setup)) {
         ImGui::End();
         return;
@@ -359,7 +362,69 @@ void AppShell::draw_setup_modal() {
     ImGui::TextUnformatted("Account & device");
     ImGui::Separator();
     ImGui::Text("Current state: %s", auth_label.c_str());
+    const bool has_cfg = whatbubbles::has_os_config(*state);
+    ImGui::Text("Relay pairing: %s",
+                has_cfg ? std::string(whatbubbles::os_config_summary(*state)).c_str()
+                        : "none");
     ImGui::Dummy(ImVec2(0, 8));
+
+    ImGui::TextUnformatted("Step 1 — device pairing");
+    ImGui::TextWrapped(
+        "Paste a relay pairing code (typically obtained from the OpenBubbles "
+        "setup flow on a paired Mac). WhatBubbles hits the relay's "
+        "/api/v1/bridge/get-version-info endpoint to fetch hardware info and "
+        "persists an OSConfig to os_config.json.");
+
+    ImGui::TextUnformatted("Relay host");
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##relayhost", relay_host_buf.data(), relay_host_buf.size(),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+        try {
+            whatbubbles::set_relay_host(*state,
+                rust::Str(std::string(relay_host_buf.data())));
+            push_toast("relay host saved");
+        } catch (const std::exception& e) {
+            push_toast(std::string("relay host: ") + e.what());
+        }
+    }
+
+    ImGui::TextUnformatted("Pairing code");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##pair", "paste the code here",
+                             setup_pair_code.data(), setup_pair_code.size());
+
+    ImGui::TextUnformatted("Beeper access token (optional)");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##beeper", "X-Beeper-Access-Token, if the relay needs one",
+                             setup_beeper_token.data(), setup_beeper_token.size());
+
+    if (ImGui::Button("Complete pairing")) {
+        try {
+            whatbubbles::complete_pairing(*state,
+                rust::Str(std::string(setup_pair_code.data())),
+                rust::Str(std::string(setup_beeper_token.data())));
+            auth_label = to_std(whatbubbles::auth_state(*state));
+            push_toast("pairing saved");
+        } catch (const std::exception& e) {
+            push_toast(std::string("pair: ") + e.what());
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear pairing")) {
+        try {
+            whatbubbles::clear_pairing(*state);
+            auth_label = to_std(whatbubbles::auth_state(*state));
+        } catch (const std::exception& e) {
+            push_toast(std::string("clear: ") + e.what());
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Step 2 — Apple ID");
+    if (!has_cfg) {
+        ImGui::TextDisabled("Complete step 1 first.");
+    }
+    ImGui::BeginDisabled(!has_cfg);
 
     ImGui::TextUnformatted("Apple ID");
     ImGui::SetNextItemWidth(-1);
@@ -382,7 +447,7 @@ void AppShell::draw_setup_modal() {
         }
     }
 
-    ImGui::Dummy(ImVec2(0, 12));
+    ImGui::Dummy(ImVec2(0, 8));
     ImGui::TextUnformatted("Two-factor code");
     ImGui::SetNextItemWidth(120);
     ImGui::InputText("##2fa", setup_2fa.data(), setup_2fa.size(),
@@ -397,32 +462,12 @@ void AppShell::draw_setup_modal() {
         }
     }
 
-    ImGui::Dummy(ImVec2(0, 12));
-    ImGui::TextUnformatted("Device pairing");
-    if (ImGui::Button("Request pairing code")) {
-        try {
-            auto code = whatbubbles::request_pairing_code(*state);
-            std::strncpy(setup_pair_code.data(), std::string(code).c_str(),
-                         setup_pair_code.size() - 1);
-        } catch (const std::exception& e) {
-            push_toast(std::string("pair request: ") + e.what());
-        }
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(140);
-    ImGui::InputText("##pair", setup_pair_code.data(), setup_pair_code.size());
-    ImGui::SameLine();
-    if (ImGui::Button("Complete pairing")) {
-        try {
-            whatbubbles::complete_pairing(*state,
-                rust::Str(std::string(setup_pair_code.data())));
-        } catch (const std::exception& e) {
-            push_toast(std::string("pair complete: ") + e.what());
-        }
-    }
+    ImGui::EndDisabled();
 
-    ImGui::Dummy(ImVec2(0, 16));
-    ImGui::TextDisabled("Network calls are stubbed — see rust/src/integration.rs.");
+    ImGui::Dummy(ImVec2(0, 12));
+    ImGui::TextDisabled(
+        "Apple ID sign-in routes through APS + anisette + IDS registration — not "
+        "yet wired. Next-session scope.");
     ImGui::End();
 }
 

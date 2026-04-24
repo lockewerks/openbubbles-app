@@ -67,6 +67,10 @@ mod bridge {
 
         fn data_dir(app: &AppState) -> String;
         fn auth_state(app: &AppState) -> String;
+        fn relay_host(app: &AppState) -> String;
+        fn set_relay_host(app: &AppState, host: &str) -> Result<()>;
+        fn has_os_config(app: &AppState) -> bool;
+        fn os_config_summary(app: &AppState) -> String;
         fn list_chats(app: &AppState, include_archived: bool) -> Vec<ChatSummary>;
         fn list_messages(app: &AppState, chat_guid: &str, limit: i64) -> Vec<MessageView>;
         fn list_handles(app: &AppState) -> Vec<HandleInfo>;
@@ -81,8 +85,8 @@ mod bridge {
 
         fn start_apple_id_auth(app: &AppState, apple_id: &str, password: &str) -> Result<()>;
         fn submit_two_factor_code(app: &AppState, code: &str) -> Result<()>;
-        fn request_pairing_code(app: &AppState) -> Result<String>;
-        fn complete_pairing(app: &AppState, code: &str) -> Result<()>;
+        fn complete_pairing(app: &AppState, code: &str, beeper_token: &str) -> Result<()>;
+        fn clear_pairing(app: &AppState) -> Result<()>;
         fn start_facetime_call(app: &AppState, address: &str) -> Result<String>;
 
         fn poll_events(app: &AppState) -> Vec<EventDto>;
@@ -127,6 +131,36 @@ fn data_dir(app: &AppState) -> String {
 
 fn auth_state(app: &AppState) -> String {
     app.auth_label()
+}
+
+fn relay_host(app: &AppState) -> String {
+    app.relay_host()
+}
+
+fn set_relay_host(app: &AppState, host: &str) -> Result<()> {
+    let trimmed = host.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("relay host cannot be empty"));
+    }
+    app.set_relay_host(trimmed.to_string())
+}
+
+fn has_os_config(app: &AppState) -> bool {
+    app.has_os_config()
+}
+
+fn os_config_summary(app: &AppState) -> String {
+    let guard = app.os_config.lock();
+    match guard.as_ref() {
+        None => "none".to_string(),
+        Some(cfg) => format!(
+            "host={} code={}… udid={} proto={}",
+            cfg.host,
+            cfg.code.chars().take(8).collect::<String>(),
+            cfg.udid.as_deref().unwrap_or(""),
+            cfg.protocol_version
+        ),
+    }
 }
 
 fn list_chats(app: &AppState, include_archived: bool) -> Vec<bridge::ChatSummary> {
@@ -335,8 +369,8 @@ fn start_apple_id_auth(app: &AppState, apple_id: &str, password: &str) -> Result
     app.runtime_handle.spawn(async move {
         match integration::authenticate_apple_id(&apple, &pw).await {
             Ok(()) => {
-                *auth_slot.lock() = AuthState::DevicePairingRequired;
-                let label = AuthState::DevicePairingRequired.label();
+                *auth_slot.lock() = AuthState::Ready;
+                let label = AuthState::Ready.label();
                 let _ = storage.lock().kv_set("auth.state", &label);
                 bus.send(Event::AuthStateChanged { state: label });
             }
@@ -363,32 +397,31 @@ fn submit_two_factor_code(app: &AppState, code: &str) -> Result<()> {
     Ok(())
 }
 
-fn request_pairing_code(_app: &AppState) -> Result<String> {
-    crate::RUNTIME.block_on(async { integration::request_device_pairing_code().await })
+fn complete_pairing(app: &AppState, code: &str, beeper_token: &str) -> Result<()> {
+    if code.trim().is_empty() {
+        return Err(anyhow!("pairing code is required"));
+    }
+    let host = app.relay_host();
+    let code_s = code.trim().to_string();
+    let token = if beeper_token.trim().is_empty() {
+        None
+    } else {
+        Some(beeper_token.trim().to_string())
+    };
+
+    let config = crate::RUNTIME
+        .block_on(crate::os_config::fetch_relay_config(&host, &code_s, token))?;
+    app.persist_os_config(config)?;
+    app.set_auth(AuthState::NeedsCredentials);
+    app.events
+        .send(Event::Info("paired with relay; enter Apple ID next".into()));
+    Ok(())
 }
 
-fn complete_pairing(app: &AppState, code: &str) -> Result<()> {
-    let c = code.to_string();
-    let bus = app.events.clone();
-    let auth_slot = app.auth.clone();
-    let storage = app.storage.clone();
-    app.runtime_handle.spawn(async move {
-        match integration::complete_device_pairing(&c).await {
-            Ok(()) => {
-                *auth_slot.lock() = AuthState::Ready;
-                let label = AuthState::Ready.label();
-                let _ = storage.lock().kv_set("auth.state", &label);
-                bus.send(Event::AuthStateChanged { state: label });
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                *auth_slot.lock() = AuthState::Errored(msg.clone());
-                let label = AuthState::Errored(msg).label();
-                let _ = storage.lock().kv_set("auth.state", &label);
-                bus.send(Event::AuthStateChanged { state: label });
-            }
-        }
-    });
+fn clear_pairing(app: &AppState) -> Result<()> {
+    app.clear_os_config()?;
+    app.set_auth(AuthState::NeedsHardwarePairing);
+    app.events.send(Event::Info("cleared relay pairing".into()));
     Ok(())
 }
 

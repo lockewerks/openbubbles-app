@@ -30,7 +30,9 @@ struct AppShell {
     std::array<char, 256>  setup_apple_id{};
     std::array<char, 256>  setup_password{};
     std::array<char, 16>   setup_2fa{};
-    std::array<char, 32>   setup_pair_code{};
+    std::array<char, 64>   setup_pair_code{};
+    std::array<char, 256>  setup_beeper_token{};
+    std::array<char, 256>  relay_host_buf{};
     std::array<char, 128>  chat_search{};
     std::array<char, 256>  new_chat_target{};
     std::array<char, 256>  facetime_target{};

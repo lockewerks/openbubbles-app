@@ -22,7 +22,16 @@ target_link_libraries(whatbubbles PRIVATE
     d3d11
     dxgi
     d3dcompiler
-    dwmapi)
+    dwmapi
+    ws2_32
+    userenv
+    bcrypt
+    ncrypt
+    secur32
+    crypt32
+    advapi32
+    user32
+    ntdll)
 
 set_target_properties(whatbubbles PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"

@@ -2,9 +2,10 @@ use anyhow::{bail, Result};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthState {
-    NotConfigured,
+    NeedsHardwarePairing,
+    NeedsCredentials,
     AuthenticatingAccount,
-    DevicePairingRequired,
+    NeedsTwoFactor,
     Ready,
     Errored(String),
 }
@@ -12,9 +13,10 @@ pub enum AuthState {
 impl AuthState {
     pub fn label(&self) -> String {
         match self {
-            AuthState::NotConfigured => "not_configured".into(),
+            AuthState::NeedsHardwarePairing => "needs_pairing".into(),
+            AuthState::NeedsCredentials => "needs_credentials".into(),
             AuthState::AuthenticatingAccount => "authenticating".into(),
-            AuthState::DevicePairingRequired => "device_pairing".into(),
+            AuthState::NeedsTwoFactor => "needs_2fa".into(),
             AuthState::Ready => "ready".into(),
             AuthState::Errored(e) => format!("error:{e}"),
         }
@@ -22,19 +24,11 @@ impl AuthState {
 }
 
 pub async fn authenticate_apple_id(_apple_id: &str, _password: &str) -> Result<()> {
-    bail!("authenticate_apple_id: not yet wired — port from rustpush apple-private-apis / icloud-auth; parked entry point in rust/src/api/api.rs::do_first_time_init");
+    bail!("authenticate_apple_id: APS connection + anisette setup not yet wired — next session (see rust/src/api/api.rs::try_auth)");
 }
 
 pub async fn submit_2fa_code(_code: &str) -> Result<()> {
-    bail!("submit_2fa_code: not yet wired — see rust/src/api/api.rs::get_2fa_code flow");
-}
-
-pub async fn request_device_pairing_code() -> Result<String> {
-    bail!("request_device_pairing_code: not yet wired — hw.openbubbles.app /code endpoint; parked in lib/services/rustpush/rustpush_service.dart::gen_code");
-}
-
-pub async fn complete_device_pairing(_code: &str) -> Result<()> {
-    bail!("complete_device_pairing: not yet wired — parked in lib/services/rustpush/rustpush_service.dart::do_hw_activation");
+    bail!("submit_2fa_code: depends on authenticate_apple_id — next session");
 }
 
 pub async fn send_imessage(
